@@ -22,7 +22,7 @@ GEMINI_API_KEY = "AIzaSyDn_mFWC3blDrHDArL54pECw-wTKbOESdw"
 # --- 🔧 PENGATURAN LAINNYA 🔧 ---
 CALENDAR_URL = "https://www.forexfactory.com/calendar?day=this" 
 HOURS_AHEAD_TO_CHECK = 48
-MINIMUM_IMPACT_LEVELS = ['High', 'Medium', 'Holiday']
+MINIMUM_IMPACT_LEVELS = ['High', 'Medium', 'Holiday'] 
 NOTIFIED_EVENTS_FILE = "notified_events_history.txt"
 
 # --- KODE UTAMA ---
@@ -60,14 +60,14 @@ def send_telegram_notification(message_text):
 def analyze_with_gemini(event):
     if not gemini_model: return "_Analisis AI gagal: Model Gemini tidak terkonfigurasi._"
     
-    country = event.get('Country', 'N/A')
+    currency = event.get('Currency', 'N/A')
     if event.get('Impact') == 'Holiday':
         return "_Hari libur bank, tidak ada dampak pasar yang signifikan._"
 
     try:
-        print(f"🧠 Menganalisis '{event.get('Title', 'Tanpa Judul')}'...")
+        print(f"🧠 Menganalisis '{event.get('Event', 'Tanpa Judul')}'...")
         prompt = (
-            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event.get('Title', 'Tanpa Judul')}' yang berpengaruh pada mata uang '{country}'.\n"
+            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event.get('Event', 'Tanpa Judul')}' yang berpengaruh pada mata uang '{currency}'.\n"
             f"Data perkiraan (forecast) adalah '{event.get('Forecast', '-')}' dan data sebelumnya (previous) adalah '{event.get('Previous', '-')}'.\n"
             f"Fokus pada kemungkinan reaksi pasar (misalnya pada mata uang terkait, indeks saham, dan Emas) jika data aktual yang dirilis jauh lebih tinggi atau lebih rendah dari perkiraan. Sampaikan secara ringkas dan gunakan poin-poin."
         )
@@ -78,10 +78,9 @@ def analyze_with_gemini(event):
         print(f"❌ Error saat memanggil API Gemini: {e}"); return "_Gagal mendapatkan analisis dari AI._"
 
 def get_page_source_with_selenium(url):
-    """Menggunakan Selenium untuk mengambil HTML dari halaman yang dilindungi."""
     print("🤖 Menjalankan browser Selenium untuk melewati keamanan...")
     chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Berjalan tanpa membuka jendela browser
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -89,39 +88,47 @@ def get_page_source_with_selenium(url):
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     
-    driver.get(url)
-    time.sleep(5)  # Beri waktu 5 detik untuk halaman memuat semua JavaScript
-    
-    html_content = driver.page_source
-    driver.quit()
-    print("✅ Halaman berhasil diambil oleh Selenium.")
+    html_content = ""
+    try:
+        driver.get(url)
+        time.sleep(5)
+        html_content = driver.page_source
+        print("✅ Halaman berhasil diambil oleh Selenium.")
+    finally:
+        driver.quit()
+        
     return html_content
 
 def check_and_notify():
     print(f"\n🚀 Memulai pengecekan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     try:
-        # --- PERBAIKAN FINAL MENGGUNAKAN SELENIUM ---
         html_source = get_page_source_with_selenium(CALENDAR_URL)
         tables = pd.read_html(io.StringIO(html_source), attrs={'class': 'calendar__table'})
-        # --- AKHIR PERBAIKAN ---
         
         df = tables[0]
-        df.columns = ['_'.join(map(str, col)) for col in df.columns.values]
-        df = df.rename(columns={'Date_Date': 'Date', 'Country_Country': 'Country', 'Time_Time': 'Time', 'Impact_Impact':'Impact', 'Event_Event':'Title', 'Forecast_Forecast':'Forecast', 'Previous_Previous':'Previous'})
-        df = df[['Date', 'Time', 'Country', 'Impact', 'Title', 'Forecast', 'Previous']]
+        
+        # --- PERBAIKAN PEMBERSIHAN KOLOM ---
+        # Ambil level kedua dari header multi-level sebagai nama kolom utama
+        df.columns = df.columns.get_level_values(1)
+        # Ganti nama kolom 'Event' menjadi 'Title' agar konsisten dengan sisa skrip
+        df = df.rename(columns={'Event': 'Title'})
+        # Ganti nama kolom 'Currency' menjadi 'Country' agar konsisten
+        df = df.rename(columns={'Currency': 'Country'})
+        # --- AKHIR PERBAIKAN ---
+
         df = df[df['Impact'].isin(MINIMUM_IMPACT_LEVELS)]
-
         df['Date'].fillna(method='ffill', inplace=True)
-        df['DateTimeStr'] = df['Date'] + ' ' + df['Time']
-        df['DateTimeStr'] = df['DateTimeStr'].str.replace('pm', ' PM').str.replace('am', ' AM').str.strip()
+        
+        # Hapus baris di mana 'Time' adalah NaN atau 'All Day' sebelum konversi
+        df = df.dropna(subset=['Time'])
         df = df[~df['Time'].str.contains('All Day', na=False)]
-        df = df.dropna(subset=['Time']) # Hapus baris tanpa waktu
 
+        # Proses konversi waktu
         eastern = pytz.timezone('America/New_York')
         current_year = datetime.now().year
-        df['DateTimeLocalized'] = df['DateTimeStr'].apply(
-            lambda x: eastern.localize(pd.to_datetime(f"{x} {current_year}", format='%a %b %d %I:%M %p %Y', errors='coerce'), is_dst=None)
-        )
+        df['DateTimeStr'] = df['Date'].str.strip() + ' ' + df['Time'].str.replace(r'(am|pm)', r' \1', regex=True).str.strip() + f' {current_year}'
+        
+        df['DateTimeLocalized'] = pd.to_datetime(df['DateTimeStr'], format='%a %b %d %I:%M %p %Y', errors='coerce').dt.tz_localize(eastern, ambiguous='infer')
         df['DateTimeUTC'] = df['DateTimeLocalized'].dt.tz_convert(pytz.utc)
         df = df.dropna(subset=['DateTimeUTC'])
 
@@ -132,9 +139,9 @@ def check_and_notify():
     now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
     time_limit = now_utc + timedelta(hours=HOURS_AHEAD_TO_CHECK)
     
-    upcoming_events = df[
-        (df['DateTimeUTC'] > now_utc) & (df['DateTimeUTC'] <= time_limit)
-    ].sort_values(by='DateTimeUTC')
+    # Filter hanya untuk kejadian yang akan datang
+    upcoming_events = df[df['DateTimeUTC'] > now_utc].copy()
+    upcoming_events = upcoming_events[upcoming_events['DateTimeUTC'] <= time_limit].sort_values(by='DateTimeUTC')
 
     if upcoming_events.empty:
         print("ℹ️ Tidak ada berita relevan dalam waktu dekat.")
@@ -149,7 +156,6 @@ def check_and_notify():
             event_id = f"{event.get('DateTimeUTC')}-{event.get('Title')}-{event.get('Country')}"
             if event_id in notified_events: continue
             
-            # ... (sisa kode sama)
             country = event.get('Country', 'N/A')
             title = event.get('Title', 'Tanpa Judul')
             impact = event.get('Impact', 'Unknown')
@@ -160,7 +166,10 @@ def check_and_notify():
             print(f"⚠️ Gagal memproses baris data, melewati. Error: {e}"); continue
 
         print(f"Menemukan event baru: {title}")
-        analisis_gemini = analyze_with_gemini(event)
+        
+        # Mengganti 'Title' dengan 'Event' saat memanggil fungsi analisis
+        event_for_analysis = event.rename({'Title': 'Event'})
+        analisis_gemini = analyze_with_gemini(event_for_analysis)
         
         pesan_lengkap = (
             f"{get_impact_emoji(impact)} *AUTO NEWS & ANALYSIS*\n\n"
