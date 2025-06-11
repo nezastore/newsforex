@@ -1,0 +1,1 @@
+while true; do python3 ai.py; echo "Pengecekan selesai pada $(date). Menunggu 1 jam untuk siklus berikutnya..."; sleep 3600; done
