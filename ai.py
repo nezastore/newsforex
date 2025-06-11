@@ -2,11 +2,16 @@ import io
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-import dateutil.parser
 import time
 import os
 import google.generativeai as genai
-import pytz # Tambahkan import pytz di atas
+import pytz
+
+# Import library baru untuk Selenium
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
 # --- ⚙️ KONFIGURASI WAJIB ⚙️ ---
 # Kredensial Anda sudah benar, tidak perlu diubah.
@@ -17,8 +22,7 @@ GEMINI_API_KEY = "AIzaSyDn_mFWC3blDrHDArL54pECw-wTKbOESdw"
 # --- 🔧 PENGATURAN LAINNYA 🔧 ---
 CALENDAR_URL = "https://www.forexfactory.com/calendar?day=this" 
 HOURS_AHEAD_TO_CHECK = 48
-# Sertakan 'Holiday' agar tidak error, tapi nanti kita filter
-MINIMUM_IMPACT_LEVELS = ['High', 'Medium', 'Holiday'] 
+MINIMUM_IMPACT_LEVELS = ['High', 'Medium', 'Holiday']
 NOTIFIED_EVENTS_FILE = "notified_events_history.txt"
 
 # --- KODE UTAMA ---
@@ -73,30 +77,37 @@ def analyze_with_gemini(event):
     except Exception as e:
         print(f"❌ Error saat memanggil API Gemini: {e}"); return "_Gagal mendapatkan analisis dari AI._"
 
+def get_page_source_with_selenium(url):
+    """Menggunakan Selenium untuk mengambil HTML dari halaman yang dilindungi."""
+    print("🤖 Menjalankan browser Selenium untuk melewati keamanan...")
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # Berjalan tanpa membuka jendela browser
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    
+    driver.get(url)
+    time.sleep(5)  # Beri waktu 5 detik untuk halaman memuat semua JavaScript
+    
+    html_content = driver.page_source
+    driver.quit()
+    print("✅ Halaman berhasil diambil oleh Selenium.")
+    return html_content
+
 def check_and_notify():
     print(f"\n🚀 Memulai pengecekan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     try:
-        # --- PERBAIKAN FINAL UNTUK ERROR 403 ---
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Connection': 'keep-alive',
-        }
-        # 1. Unduh halaman web menggunakan requests dengan penyamaran
-        response = requests.get(CALENDAR_URL, headers=headers)
-        response.raise_for_status()
+        # --- PERBAIKAN FINAL MENGGUNAKAN SELENIUM ---
+        html_source = get_page_source_with_selenium(CALENDAR_URL)
+        tables = pd.read_html(io.StringIO(html_source), attrs={'class': 'calendar__table'})
+        # --- AKHIR PERBAIKAN ---
         
-        # 2. Berikan hasil unduhan (HTML mentah) ke pandas untuk dibaca
-        tables = pd.read_html(io.StringIO(response.text), attrs={'class': 'calendar__table'})
-        # --- AKHIR PERBAIKAN FINAL ---
-
         df = tables[0]
-        
-        # Membersihkan kolom multi-level dari pandas
-        df.columns = ['_'.join(col).strip() for col in df.columns.values]
+        df.columns = ['_'.join(map(str, col)) for col in df.columns.values]
         df = df.rename(columns={'Date_Date': 'Date', 'Country_Country': 'Country', 'Time_Time': 'Time', 'Impact_Impact':'Impact', 'Event_Event':'Title', 'Forecast_Forecast':'Forecast', 'Previous_Previous':'Previous'})
-        
         df = df[['Date', 'Time', 'Country', 'Impact', 'Title', 'Forecast', 'Previous']]
         df = df[df['Impact'].isin(MINIMUM_IMPACT_LEVELS)]
 
@@ -104,10 +115,13 @@ def check_and_notify():
         df['DateTimeStr'] = df['Date'] + ' ' + df['Time']
         df['DateTimeStr'] = df['DateTimeStr'].str.replace('pm', ' PM').str.replace('am', ' AM').str.strip()
         df = df[~df['Time'].str.contains('All Day', na=False)]
-        
-        # Konversi waktu dengan timezone yang benar
+        df = df.dropna(subset=['Time']) # Hapus baris tanpa waktu
+
         eastern = pytz.timezone('America/New_York')
-        df['DateTimeLocalized'] = df['DateTimeStr'].apply(lambda x: eastern.localize(pd.to_datetime(x, format='%a %b %d %I:%M %p', errors='coerce'), is_dst=None))
+        current_year = datetime.now().year
+        df['DateTimeLocalized'] = df['DateTimeStr'].apply(
+            lambda x: eastern.localize(pd.to_datetime(f"{x} {current_year}", format='%a %b %d %I:%M %p %Y', errors='coerce'), is_dst=None)
+        )
         df['DateTimeUTC'] = df['DateTimeLocalized'].dt.tz_convert(pytz.utc)
         df = df.dropna(subset=['DateTimeUTC'])
 
@@ -134,7 +148,8 @@ def check_and_notify():
         try:
             event_id = f"{event.get('DateTimeUTC')}-{event.get('Title')}-{event.get('Country')}"
             if event_id in notified_events: continue
-                
+            
+            # ... (sisa kode sama)
             country = event.get('Country', 'N/A')
             title = event.get('Title', 'Tanpa Judul')
             impact = event.get('Impact', 'Unknown')
@@ -166,7 +181,4 @@ def check_and_notify():
         time.sleep(3)
 
 if __name__ == "__main__":
-    if any(k in v for k, v in [("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN), ("GEMINI_API_KEY", GEMINI_API_KEY)] for s in ["GANTI", "PLACEHOLDER"]):
-        print("‼️ KESALAHAN: Harap isi kredensial di dalam skrip.")
-    else:
-        check_and_notify()
+    check_and_notify()
