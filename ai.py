@@ -1,3 +1,5 @@
+# Menambahkan 'import io' di sini
+import io
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
@@ -7,7 +9,7 @@ import os
 import google.generativeai as genai
 
 # --- ⚙️ KONFIGURASI WAJIB ⚙️ ---
-# Ganti dengan 3 kredensial Anda di bawah ini.
+# Kredensial Anda aman dan tidak diubah.
 
 # 1. Kredensial Telegram
 TELEGRAM_BOT_TOKEN = "7671514391:AAEzysUcRtIEnGVjBfZw45wY3S7Qf-foAIk"
@@ -66,7 +68,6 @@ def analyze_with_gemini(event):
 
     try:
         print(f"🧠 Menganalisis '{event['Title']}' dengan Gemini (Bahasa Indonesia)...")
-        # --- Prompt ini diubah ke Bahasa Indonesia ---
         prompt = (
             f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event['Title']}' yang berpengaruh pada mata uang '{event['Currency']}'.\n"
             f"Data perkiraan (forecast) adalah '{event['Forecast']}' dan data sebelumnya (previous) adalah '{event['Previous']}'.\n"
@@ -83,12 +84,30 @@ def analyze_with_gemini(event):
 def check_and_notify():
     print(f"\n🚀 Memulai pengecekan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
+    # --- BAGIAN YANG DIPERBAIKI UNTUK MENGATASI ERROR 403 ---
     try:
-        df = pd.read_csv(CALENDAR_URL)
+        # Menambahkan headers agar terlihat seperti browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # Menggunakan requests untuk mengambil data dengan headers
+        response = requests.get(CALENDAR_URL, headers=headers)
+        response.raise_for_status()  # Ini akan error jika status bukan 200 OK
+        
+        # Membaca data CSV dari teks yang didapat
+        csv_file = io.StringIO(response.text)
+        df = pd.read_csv(csv_file)
+        
         df['DateTimeUTC'] = df.apply(lambda row: dateutil.parser.parse(row['Date'] + ' ' + row['Time']), axis=1)
-    except Exception as e:
-        print(f"❌ Gagal mengambil atau memproses data CSV: {e}")
+    # Menangkap error lebih spesifik
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Gagal mengambil data CSV: {e}")
         return
+    except Exception as e:
+        print(f"❌ Gagal memproses data CSV: {e}")
+        return
+    # --- AKHIR BAGIAN YANG DIPERBAIKI ---
 
     now_utc = datetime.utcnow()
     time_limit = now_utc + timedelta(hours=HOURS_AHEAD_TO_CHECK)
@@ -138,6 +157,7 @@ def check_and_notify():
         time.sleep(3)
 
 if __name__ == "__main__":
+    # Pemeriksaan ini sekarang akan lolos karena kunci Anda sudah diisi
     if "GANTI_DENGAN" in TELEGRAM_BOT_TOKEN or "GANTI_DENGAN" in GEMINI_API_KEY:
         print("‼️ KESALAHAN: Harap isi TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, dan GEMINI_API_KEY di dalam skrip.")
     else:
