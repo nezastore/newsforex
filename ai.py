@@ -1,4 +1,4 @@
-# Menambahkan 'import io' di sini
+# Impor library 'io' di bagian paling atas
 import io
 import requests
 import pandas as pd
@@ -9,19 +9,13 @@ import os
 import google.generativeai as genai
 
 # --- ⚙️ KONFIGURASI WAJIB ⚙️ ---
-# Kredensial Anda aman dan tidak diubah.
-
-# 1. Kredensial Telegram
+# Kredensial Anda sudah benar, tidak perlu diubah.
 TELEGRAM_BOT_TOKEN = "7671514391:AAEzysUcRtIEnGVjBfZw45wY3S7Qf-foAIk"
 TELEGRAM_CHAT_ID = "-1002402298037"
-
-# 2. Kredensial Google Gemini
 GEMINI_API_KEY = "AIzaSyDn_mFWC3blDrHDArL54pECw-wTKbOESdw"
 
-# 3. URL Kalender Ekonomi (tidak perlu diubah)
+# --- 🔧 PENGATURAN LAINNYA 🔧 ---
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.csv"
-
-# --- 🔧 PENGATURAN NOTIFIKASI 🔧 ---
 HOURS_AHEAD_TO_CHECK = 48
 MINIMUM_IMPACT_LEVELS = ['High', 'Medium']
 NOTIFIED_EVENTS_FILE = "notified_events_history.txt"
@@ -65,15 +59,14 @@ def send_telegram_notification(message_text):
 def analyze_with_gemini(event):
     if not gemini_model:
         return "_Analisis AI gagal: Model Gemini tidak terkonfigurasi._"
-
     try:
-        print(f"🧠 Menganalisis '{event['Title']}' dengan Gemini (Bahasa Indonesia)...")
+        currency = event.get('Currency', 'N/A') # Menggunakan .get() untuk keamanan
+        print(f"🧠 Menganalisis '{event.get('Title', 'Tanpa Judul')}' dengan Gemini (Bahasa Indonesia)...")
         prompt = (
-            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event['Title']}' yang berpengaruh pada mata uang '{event['Currency']}'.\n"
-            f"Data perkiraan (forecast) adalah '{event['Forecast']}' dan data sebelumnya (previous) adalah '{event['Previous']}'.\n"
+            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event.get('Title', 'Tanpa Judul')}' yang berpengaruh pada mata uang '{currency}'.\n"
+            f"Data perkiraan (forecast) adalah '{event.get('Forecast', '-')}' dan data sebelumnya (previous) adalah '{event.get('Previous', '-')}'.\n"
             f"Fokus pada kemungkinan reaksi pasar (misalnya pada mata uang terkait, indeks saham, dan Emas) jika data aktual yang dirilis jauh lebih tinggi atau lebih rendah dari perkiraan. Sampaikan secara ringkas dan gunakan poin-poin (bullet points)."
         )
-        
         response = gemini_model.generate_content(prompt)
         print("💡 Analisis Gemini (ID) diterima.")
         return response.text
@@ -83,31 +76,26 @@ def analyze_with_gemini(event):
 
 def check_and_notify():
     print(f"\n🚀 Memulai pengecekan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # --- BAGIAN YANG DIPERBAIKI UNTUK MENGATASI ERROR 403 ---
     try:
-        # Menambahkan headers agar terlihat seperti browser
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        
-        # Menggunakan requests untuk mengambil data dengan headers
         response = requests.get(CALENDAR_URL, headers=headers)
-        response.raise_for_status()  # Ini akan error jika status bukan 200 OK
-        
-        # Membaca data CSV dari teks yang didapat
+        response.raise_for_status()
         csv_file = io.StringIO(response.text)
         df = pd.read_csv(csv_file)
         
+        # --- PERBAIKAN 1: Hapus baris yang kolom Currency-nya kosong ---
+        df.dropna(subset=['Currency'], inplace=True)
+        # ----------------------------------------------------------------
+
         df['DateTimeUTC'] = df.apply(lambda row: dateutil.parser.parse(row['Date'] + ' ' + row['Time']), axis=1)
-    # Menangkap error lebih spesifik
     except requests.exceptions.RequestException as e:
         print(f"❌ Gagal mengambil data CSV: {e}")
         return
     except Exception as e:
         print(f"❌ Gagal memproses data CSV: {e}")
         return
-    # --- AKHIR BAGIAN YANG DIPERBAIKI ---
 
     now_utc = datetime.utcnow()
     time_limit = now_utc + timedelta(hours=HOURS_AHEAD_TO_CHECK)
@@ -127,26 +115,37 @@ def check_and_notify():
     notified_events = load_notified_events()
 
     for index, event in upcoming_events.iterrows():
-        event_id = f"{event['DateTimeUTC']}-{event['Title']}-{event['Currency']}"
+        # --- PERBAIKAN 2: Gunakan .get() untuk akses yang lebih aman ---
+        try:
+            event_id = f"{event.get('DateTimeUTC')}-{event.get('Title')}-{event.get('Currency')}"
+            currency = event.get('Currency', 'N/A') # N/A = Not Available
+            title = event.get('Title', 'Tanpa Judul')
+            impact = event.get('Impact', 'Unknown')
+            waktu_berita_wib = event.get('DateTimeUTC') + timedelta(hours=7)
+            forecast = event.get('Forecast', '-')
+            previous = event.get('Previous', '-')
 
-        if event_id in notified_events:
+            if event_id in notified_events:
+                continue
+        except Exception as e:
+            print(f"⚠️ Gagal memproses baris data, melewati. Error: {e}")
             continue
+        # ---------------------------------------------------------------
 
-        print(f"Menemukan event baru: {event['Title']}")
-        waktu_berita_wib = event['DateTimeUTC'] + timedelta(hours=7)
+        print(f"Menemukan event baru: {title}")
         
-        print(f"Meminta analisis untuk {event['Title']}...")
-        analisis_gemini = analyze_with_gemini(event)
+        print(f"Meminta analisis untuk {title}...")
+        analisis_gemini = analyze_with_gemini(event) # Mengirim 'event' series utuh
         
         pesan_lengkap = (
-            f"{get_impact_emoji(event['Impact'])} *AUTO NEWS & ANALYSIS* {get_impact_emoji(event['Impact'])}\n\n"
-            f"🗓️ *Berita:* {event['Title']}\n"
-            f"🇦🇺 *Mata Uang:* {event['Currency']}\n"
-            f"💥 *Dampak:* {event['Impact']}\n\n"
+            f"{get_impact_emoji(impact)} *AUTO NEWS & ANALYSIS* {get_impact_emoji(impact)}\n\n"
+            f"🗓️ *Berita:* {title}\n"
+            f"🇦🇺 *Mata Uang:* {currency}\n"
+            f"💥 *Dampak:* {impact}\n\n"
             f"⏰ *Waktu Rilis (WIB):* {waktu_berita_wib.strftime('%A, %d %B %Y, %H:%M')}\n\n"
             f"📊 *Data*:\n"
-            f"   - Perkiraan: `{event['Forecast']}`\n"
-            f"   - Sebelumnya: `{event['Previous']}`\n\n"
+            f"   - Perkiraan: `{forecast}`\n"
+            f"   - Sebelumnya: `{previous}`\n\n"
             f"🤖 *Analisis Otomatis Gemini (ID):*\n"
             f"{analisis_gemini}"
         )
@@ -157,7 +156,6 @@ def check_and_notify():
         time.sleep(3)
 
 if __name__ == "__main__":
-    # Pemeriksaan ini sekarang akan lolos karena kunci Anda sudah diisi
     if "GANTI_DENGAN" in TELEGRAM_BOT_TOKEN or "GANTI_DENGAN" in GEMINI_API_KEY:
         print("‼️ KESALAHAN: Harap isi TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, dan GEMINI_API_KEY di dalam skrip.")
     else:
