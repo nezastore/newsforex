@@ -1,4 +1,3 @@
-# Impor library 'io' di bagian paling atas
 import io
 import requests
 import pandas as pd
@@ -15,7 +14,9 @@ TELEGRAM_CHAT_ID = "-1002402298037"
 GEMINI_API_KEY = "AIzaSyDn_mFWC3blDrHDArL54pECw-wTKbOESdw"
 
 # --- 🔧 PENGATURAN LAINNYA 🔧 ---
-CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.csv"
+# URL Kalender Ekonomi dari Forex Factory
+CALENDAR_URL = "https://www.forexfactory.com/calendar.php?day=this" 
+# Pengaturan notifikasi
 HOURS_AHEAD_TO_CHECK = 48
 MINIMUM_IMPACT_LEVELS = ['High', 'Medium']
 NOTIFIED_EVENTS_FILE = "notified_events_history.txt"
@@ -32,7 +33,7 @@ except Exception as e:
     gemini_model = None
 
 def get_impact_emoji(impact):
-    return {'High': '🔴', 'Medium': '🟠', 'Low': '🟡'}.get(impact, '⚪️')
+    return {'High': '🔴', 'Medium': '🟠', 'Low': '🟡', 'Holiday': '🎉'}.get(impact, '⚪️')
 
 def load_notified_events():
     if not os.path.exists(NOTIFIED_EVENTS_FILE):
@@ -59,11 +60,16 @@ def send_telegram_notification(message_text):
 def analyze_with_gemini(event):
     if not gemini_model:
         return "_Analisis AI gagal: Model Gemini tidak terkonfigurasi._"
+    
+    country = event.get('Country', 'N/A')
+    # Jangan minta analisis untuk Holiday
+    if event.get('Impact') == 'Holiday':
+        return "_Hari libur bank, tidak ada dampak pasar yang signifikan._"
+
     try:
-        currency = event.get('Currency', 'N/A') # Menggunakan .get() untuk keamanan
         print(f"🧠 Menganalisis '{event.get('Title', 'Tanpa Judul')}' dengan Gemini (Bahasa Indonesia)...")
         prompt = (
-            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event.get('Title', 'Tanpa Judul')}' yang berpengaruh pada mata uang '{currency}'.\n"
+            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event.get('Title', 'Tanpa Judul')}' yang berpengaruh pada mata uang '{country}'.\n"
             f"Data perkiraan (forecast) adalah '{event.get('Forecast', '-')}' dan data sebelumnya (previous) adalah '{event.get('Previous', '-')}'.\n"
             f"Fokus pada kemungkinan reaksi pasar (misalnya pada mata uang terkait, indeks saham, dan Emas) jika data aktual yang dirilis jauh lebih tinggi atau lebih rendah dari perkiraan. Sampaikan secara ringkas dan gunakan poin-poin (bullet points)."
         )
@@ -77,27 +83,36 @@ def analyze_with_gemini(event):
 def check_and_notify():
     print(f"\n🚀 Memulai pengecekan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(CALENDAR_URL, headers=headers)
-        response.raise_for_status()
-        csv_file = io.StringIO(response.text)
-        df = pd.read_csv(csv_file)
+        # Menggunakan pandas untuk membaca tabel HTML langsung dari URL
+        tables = pd.read_html(CALENDAR_URL, attrs={'class': 'calendar__table'})
+        df = tables[0]
+
+        # Membersihkan dan merapikan data
+        df = df.dropna(subset=[('Impact', 'Impact')])
+        df = df.rename(columns={('Unnamed: 3_level_0', 'Graph'): 'Graph', 
+                                ('Impact', 'Impact'): 'Impact',
+                                ('Forecast', 'Forecast'): 'Forecast',
+                                ('Previous', 'Previous'): 'Previous',
+                                ('Unnamed: 2_level_0', 'Time'): 'Time',
+                                ('Unnamed: 1_level_0', 'Country'): 'Country',
+                                ('Unnamed: 0_level_0', 'Date'): 'Date',
+                                ('Event', 'Event'): 'Title'
+                               })
+        df = df[['Date', 'Time', 'Country', 'Impact', 'Title', 'Forecast', 'Previous']]
         
-        # --- PERBAIKAN 1: Hapus baris yang kolom Currency-nya kosong ---
-        df.dropna(subset=['Currency'], inplace=True)
-        # ----------------------------------------------------------------
+        # Mengisi tanggal yang kosong
+        df['Date'].fillna(method='ffill', inplace=True)
+        # Gabungkan Date dan Time, lalu konversi ke datetime object
+        df['DateTimeStr'] = df['Date'] + ' ' + df['Time']
+        # Ganti 'pm' dan 'am' dengan format yang benar
+        df['DateTimeStr'] = df['DateTimeStr'].str.replace('pm', ' PM').str.replace('am', ' AM')
+        df['DateTimeUTC'] = pd.to_datetime(df['DateTimeStr'], format='%b %d %I:%M %p', errors='coerce').dt.tz_localize('America/New_York').dt.tz_convert('UTC')
 
-        df['DateTimeUTC'] = df.apply(lambda row: dateutil.parser.parse(row['Date'] + ' ' + row['Time']), axis=1)
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Gagal mengambil data CSV: {e}")
-        return
     except Exception as e:
-        print(f"❌ Gagal memproses data CSV: {e}")
+        print(f"❌ Gagal mengambil atau memproses data: {e}")
         return
 
-    now_utc = datetime.utcnow()
+    now_utc = datetime.utcnow().replace(tzinfo=pytz.UTC)
     time_limit = now_utc + timedelta(hours=HOURS_AHEAD_TO_CHECK)
     
     upcoming_events = df[
@@ -115,13 +130,12 @@ def check_and_notify():
     notified_events = load_notified_events()
 
     for index, event in upcoming_events.iterrows():
-        # --- PERBAIKAN 2: Gunakan .get() untuk akses yang lebih aman ---
         try:
-            event_id = f"{event.get('DateTimeUTC')}-{event.get('Title')}-{event.get('Currency')}"
-            currency = event.get('Currency', 'N/A') # N/A = Not Available
+            event_id = f"{event.get('DateTimeUTC')}-{event.get('Title')}-{event.get('Country')}"
+            country = event.get('Country', 'N/A')
             title = event.get('Title', 'Tanpa Judul')
             impact = event.get('Impact', 'Unknown')
-            waktu_berita_wib = event.get('DateTimeUTC') + timedelta(hours=7)
+            waktu_berita_wib = event.get('DateTimeUTC').astimezone(pytz.timezone('Asia/Jakarta'))
             forecast = event.get('Forecast', '-')
             previous = event.get('Previous', '-')
 
@@ -130,23 +144,21 @@ def check_and_notify():
         except Exception as e:
             print(f"⚠️ Gagal memproses baris data, melewati. Error: {e}")
             continue
-        # ---------------------------------------------------------------
 
         print(f"Menemukan event baru: {title}")
         
-        print(f"Meminta analisis untuk {title}...")
-        analisis_gemini = analyze_with_gemini(event) # Mengirim 'event' series utuh
+        analisis_gemini = analyze_with_gemini(event)
         
         pesan_lengkap = (
-            f"{get_impact_emoji(impact)} *AUTO NEWS & ANALYSIS* {get_impact_emoji(impact)}\n\n"
+            f"{get_impact_emoji(impact)} *AUTO NEWS & ANALYSIS*\n\n"
             f"🗓️ *Berita:* {title}\n"
-            f"🇦🇺 *Mata Uang:* {currency}\n"
+            f"🇦🇺 *Mata Uang:* {country}\n"
             f"💥 *Dampak:* {impact}\n\n"
             f"⏰ *Waktu Rilis (WIB):* {waktu_berita_wib.strftime('%A, %d %B %Y, %H:%M')}\n\n"
             f"📊 *Data*:\n"
             f"   - Perkiraan: `{forecast}`\n"
             f"   - Sebelumnya: `{previous}`\n\n"
-            f"🤖 *Analisis Otomatis Gemini (ID):*\n"
+            f"🤖 *Analisis Otomatis Gemini:*\n"
             f"{analisis_gemini}"
         )
         
@@ -159,4 +171,6 @@ if __name__ == "__main__":
     if "GANTI_DENGAN" in TELEGRAM_BOT_TOKEN or "GANTI_DENGAN" in GEMINI_API_KEY:
         print("‼️ KESALAHAN: Harap isi TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, dan GEMINI_API_KEY di dalam skrip.")
     else:
+        # Import pytz di sini agar tidak error jika __name__ != "__main__"
+        import pytz
         check_and_notify()
