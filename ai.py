@@ -14,7 +14,6 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
 # --- ⚙️ KONFIGURASI WAJIB ⚙️ ---
-# Kredensial Anda sudah benar, tidak perlu diubah.
 TELEGRAM_BOT_TOKEN = "7671514391:AAEzysUcRtIEnGVjBfZw45wY3S7Qf-foAIk"
 TELEGRAM_CHAT_ID = "-1002402298037"
 GEMINI_API_KEY = "AIzaSyDn_mFWC3blDrHDArL54pECw-wTKbOESdw"
@@ -22,7 +21,7 @@ GEMINI_API_KEY = "AIzaSyDn_mFWC3blDrHDArL54pECw-wTKbOESdw"
 # --- 🔧 PENGATURAN LAINNYA 🔧 ---
 CALENDAR_URL = "https://www.forexfactory.com/calendar?day=this" 
 HOURS_AHEAD_TO_CHECK = 48
-MINIMUM_IMPACT_LEVELS = ['High', 'Medium', 'Holiday'] 
+MINIMUM_IMPACT_LEVELS = ['High', 'Medium'] # Holiday kita filter nanti
 NOTIFIED_EVENTS_FILE = "notified_events_history.txt"
 
 # --- KODE UTAMA ---
@@ -60,14 +59,14 @@ def send_telegram_notification(message_text):
 def analyze_with_gemini(event):
     if not gemini_model: return "_Analisis AI gagal: Model Gemini tidak terkonfigurasi._"
     
-    currency = event.get('Currency', 'N/A')
+    country = event.get('Country', 'N/A')
     if event.get('Impact') == 'Holiday':
         return "_Hari libur bank, tidak ada dampak pasar yang signifikan._"
 
     try:
-        print(f"🧠 Menganalisis '{event.get('Event', 'Tanpa Judul')}'...")
+        print(f"🧠 Menganalisis '{event.get('Title', 'Tanpa Judul')}'...")
         prompt = (
-            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event.get('Event', 'Tanpa Judul')}' yang berpengaruh pada mata uang '{currency}'.\n"
+            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event.get('Title', 'Tanpa Judul')}' yang berpengaruh pada mata uang '{country}'.\n"
             f"Data perkiraan (forecast) adalah '{event.get('Forecast', '-')}' dan data sebelumnya (previous) adalah '{event.get('Previous', '-')}'.\n"
             f"Fokus pada kemungkinan reaksi pasar (misalnya pada mata uang terkait, indeks saham, dan Emas) jika data aktual yang dirilis jauh lebih tinggi atau lebih rendah dari perkiraan. Sampaikan secara ringkas dan gunakan poin-poin."
         )
@@ -107,23 +106,18 @@ def check_and_notify():
         
         df = tables[0]
         
-        # --- PERBAIKAN PEMBERSIHAN KOLOM ---
-        # Ambil level kedua dari header multi-level sebagai nama kolom utama
-        df.columns = df.columns.get_level_values(1)
-        # Ganti nama kolom 'Event' menjadi 'Title' agar konsisten dengan sisa skrip
-        df = df.rename(columns={'Event': 'Title'})
-        # Ganti nama kolom 'Currency' menjadi 'Country' agar konsisten
-        df = df.rename(columns={'Currency': 'Country'})
+        # --- PERBAIKAN FINAL PEMBERSIHAN KOLOM ---
+        # Daftar nama kolom yang benar sesuai urutan di website
+        column_names = ['Date', 'Time', 'Country', 'Impact', 'Title', 'Actual', 'Forecast', 'Previous', 'Graph']
+        df.columns = column_names
         # --- AKHIR PERBAIKAN ---
 
         df = df[df['Impact'].isin(MINIMUM_IMPACT_LEVELS)]
         df['Date'].fillna(method='ffill', inplace=True)
         
-        # Hapus baris di mana 'Time' adalah NaN atau 'All Day' sebelum konversi
         df = df.dropna(subset=['Time'])
         df = df[~df['Time'].str.contains('All Day', na=False)]
 
-        # Proses konversi waktu
         eastern = pytz.timezone('America/New_York')
         current_year = datetime.now().year
         df['DateTimeStr'] = df['Date'].str.strip() + ' ' + df['Time'].str.replace(r'(am|pm)', r' \1', regex=True).str.strip() + f' {current_year}'
@@ -137,11 +131,9 @@ def check_and_notify():
         return
 
     now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
-    time_limit = now_utc + timedelta(hours=HOURS_AHEAD_TO_CHECK)
     
-    # Filter hanya untuk kejadian yang akan datang
     upcoming_events = df[df['DateTimeUTC'] > now_utc].copy()
-    upcoming_events = upcoming_events[upcoming_events['DateTimeUTC'] <= time_limit].sort_values(by='DateTimeUTC')
+    upcoming_events = upcoming_events[upcoming_events['DateTimeUTC'] <= (now_utc + timedelta(hours=HOURS_AHEAD_TO_CHECK))].sort_values(by='DateTimeUTC')
 
     if upcoming_events.empty:
         print("ℹ️ Tidak ada berita relevan dalam waktu dekat.")
@@ -167,9 +159,7 @@ def check_and_notify():
 
         print(f"Menemukan event baru: {title}")
         
-        # Mengganti 'Title' dengan 'Event' saat memanggil fungsi analisis
-        event_for_analysis = event.rename({'Title': 'Event'})
-        analisis_gemini = analyze_with_gemini(event_for_analysis)
+        analisis_gemini = analyze_with_gemini(event)
         
         pesan_lengkap = (
             f"{get_impact_emoji(impact)} *AUTO NEWS & ANALYSIS*\n\n"
