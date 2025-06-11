@@ -21,7 +21,7 @@ GEMINI_API_KEY = "AIzaSyDn_mFWC3blDrHDArL54pECw-wTKbOESdw"
 # --- 🔧 PENGATURAN LAINNYA 🔧 ---
 CALENDAR_URL = "https://www.forexfactory.com/calendar?day=this" 
 HOURS_AHEAD_TO_CHECK = 48
-MINIMUM_IMPACT_LEVELS = ['High', 'Medium'] # Holiday kita filter nanti
+MINIMUM_IMPACT_LEVELS = ['High', 'Medium']
 NOTIFIED_EVENTS_FILE = "notified_events_history.txt"
 
 # --- KODE UTAMA ---
@@ -107,6 +107,9 @@ def check_and_notify():
         df = tables[0]
         
         # --- PERBAIKAN FINAL PEMBERSIHAN KOLOM ---
+        # Ambil hanya 9 kolom pertama untuk menghindari kolom ekstra yang tidak perlu
+        df = df.iloc[:, :9]
+        
         # Daftar nama kolom yang benar sesuai urutan di website
         column_names = ['Date', 'Time', 'Country', 'Impact', 'Title', 'Actual', 'Forecast', 'Previous', 'Graph']
         df.columns = column_names
