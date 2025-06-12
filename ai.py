@@ -6,181 +6,118 @@ import time
 import os
 import google.generativeai as genai
 import pytz
+import asyncio
 
-# Import library baru untuk Selenium
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+# Pastikan Anda sudah menginstalnya: pip install python-telegram-bot
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- ⚙️ KONFIGURASI WAJIB ⚙️ ---
-TELEGRAM_BOT_TOKEN = "7671514391:AAEzysUcRtIEnGVjBfZw45wY3S7Qf-foAIk"
-TELEGRAM_CHAT_ID = "-1002402298037"
-GEMINI_API_KEY = "AIzaSyDn_mFWC3blDrHDArL54pECw-wTKbOESdw"
+TELEGRAM_BOT_TOKEN = "ISI_DENGAN_TOKEN_BOT_ANDA" 
+GEMINI_API_KEY = "ISI_DENGAN_GEMINI_API_KEY_ANDA" 
 
 # --- 🔧 PENGATURAN LAINNYA 🔧 ---
-CALENDAR_URL = "https://www.forexfactory.com/calendar?day=this" 
+CALENDAR_URL = "https://www.cryptocraft.com/calendar"
 HOURS_AHEAD_TO_CHECK = 48
 MINIMUM_IMPACT_LEVELS = ['High', 'Medium']
-NOTIFIED_EVENTS_FILE = "notified_events_history.txt"
+NOTIFIED_EVENTS_FILE = "notified_crypto_events_history.txt"
+CHECK_INTERVAL_SECONDS = 1800 
+SUBSCRIBERS_FILE = "subscribers.txt"
 
-# --- KODE UTAMA ---
+# --- FUNGSI-FUNGSI UTAMA ---
 
-# Konfigurasi model Gemini
+# Konfigurasi Gemini
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel('gemini-pro')
     print("✅ Model Gemini berhasil dikonfigurasi.")
 except Exception as e:
-    print(f"❌ Gagal mengkonfigurasi Gemini. Periksa API Key Anda. Error: {e}")
+    print(f"❌ Gagal mengkonfigurasi Gemini: {e}")
     gemini_model = None
 
-def get_impact_emoji(impact):
-    return {'High': '🔴', 'Medium': '🟠', 'Low': '🟡', 'Holiday': '🎉'}.get(impact, '⚪️')
+# Fungsi untuk memuat dan menyimpan daftar pelanggan
+def load_subscribers():
+    if not os.path.exists(SUBSCRIBERS_FILE):
+        return set()
+    with open(SUBSCRIBERS_FILE, 'r') as f:
+        return set(line.strip() for line in f)
 
-def load_notified_events():
-    if not os.path.exists(NOTIFIED_EVENTS_FILE): return set()
-    with open(NOTIFIED_EVENTS_FILE, 'r') as f: return set(line.strip() for line in f)
+def save_subscribers(subscribers):
+    with open(SUBSCRIBERS_FILE, 'w') as f:
+        for sub_id in subscribers:
+            f.write(str(sub_id) + '\n')
 
-def save_notified_event(event_id):
-    with open(NOTIFIED_EVENTS_FILE, 'a') as f: f.write(str(event_id) + '\n')
+# ### <<< PERUBAHAN 1: Hanya ada perintah /start >>> ###
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menyapa pengguna dan otomatis mendaftarkan mereka."""
+    user_name = update.message.from_user.first_name
+    chat_id = str(update.message.chat_id)
+    subscribers = load_subscribers()
 
-def send_telegram_notification(message_text):
-    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message_text, 'parse_mode': 'Markdown'}
-    try:
-        response = requests.post(api_url, json=payload, timeout=10)
-        response.raise_for_status()
-        print("✅ Notifikasi berhasil dikirim!")
-        return True
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Gagal mengirim notifikasi: {e}"); return False
-
-def analyze_with_gemini(event):
-    if not gemini_model: return "_Analisis AI gagal: Model Gemini tidak terkonfigurasi._"
-    
-    country = event.get('Country', 'N/A')
-    if event.get('Impact') == 'Holiday':
-        return "_Hari libur bank, tidak ada dampak pasar yang signifikan._"
-
-    try:
-        print(f"🧠 Menganalisis '{event.get('Title', 'Tanpa Judul')}'...")
-        prompt = (
-            f"Anda adalah seorang analis pasar keuangan. Berikan analisis singkat dalam Bahasa Indonesia mengenai potensi dampak pasar dari berita ekonomi: '{event.get('Title', 'Tanpa Judul')}' yang berpengaruh pada mata uang '{country}'.\n"
-            f"Data perkiraan (forecast) adalah '{event.get('Forecast', '-')}' dan data sebelumnya (previous) adalah '{event.get('Previous', '-')}'.\n"
-            f"Fokus pada kemungkinan reaksi pasar (misalnya pada mata uang terkait, indeks saham, dan Emas) jika data aktual yang dirilis jauh lebih tinggi atau lebih rendah dari perkiraan. Sampaikan secara ringkas dan gunakan poin-poin."
+    if chat_id in subscribers:
+        # Jika pengguna sudah terdaftar, hanya sapa kembali
+        await update.message.reply_text(
+            f"Selamat datang kembali, {user_name}! 👋\n\n"
+            "Anda sudah aktif menerima notifikasi berita crypto. Silahkan Langsung Mengetik Nama Koin MIsal : BTC,SOL,Dll"
         )
-        response = gemini_model.generate_content(prompt)
-        print("💡 Analisis Gemini diterima.")
-        return response.text
-    except Exception as e:
-        print(f"❌ Error saat memanggil API Gemini: {e}"); return "_Gagal mendapatkan analisis dari AI._"
+    else:
+        # Jika pengguna baru, daftarkan dan sapa
+        subscribers.add(chat_id)
+        save_subscribers(subscribers)
+        print(f"➕ Pengguna baru terdaftar: {chat_id}")
+        await update.message.reply_text(
+            f"Halo, {user_name}! 👋\n\n"
+            "✅ Anda telah berhasil terdaftar dan akan menerima notifikasi berita crypto penting secara otomatis."
+        )
 
-def get_page_source_with_selenium(url):
-    print("🤖 Menjalankan browser Selenium untuk melewati keamanan...")
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-    
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    
-    html_content = ""
-    try:
-        driver.get(url)
-        time.sleep(5)
-        html_content = driver.page_source
-        print("✅ Halaman berhasil diambil oleh Selenium.")
-    finally:
-        driver.quit()
-        
-    return html_content
+# ### <<< DIHAPUS: Fungsi unsubscribe_command sudah tidak ada lagi >>> ###
 
-def check_and_notify():
-    print(f"\n🚀 Memulai pengecekan pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    try:
-        html_source = get_page_source_with_selenium(CALENDAR_URL)
-        tables = pd.read_html(io.StringIO(html_source), attrs={'class': 'calendar__table'})
-        
-        df = tables[0]
-        
-        # --- PERBAIKAN FINAL PEMBERSIHAN KOLOM ---
-        # Ambil hanya 9 kolom pertama untuk menghindari kolom ekstra yang tidak perlu
-        df = df.iloc[:, :9]
-        
-        # Daftar nama kolom yang benar sesuai urutan di website
-        column_names = ['Date', 'Time', 'Country', 'Impact', 'Title', 'Actual', 'Forecast', 'Previous', 'Graph']
-        df.columns = column_names
-        # --- AKHIR PERBAIKAN ---
+# Fungsi-fungsi scraping dan analisis (Tidak ada perubahan di sini)
+# Pastikan semua fungsi dari get_impact_emoji hingga check_and_notify_job LENGKAP ada di sini
+# ... (Salin semua fungsi dari skrip sebelumnya) ...
 
-        df = df[df['Impact'].isin(MINIMUM_IMPACT_LEVELS)]
-        df['Date'].fillna(method='ffill', inplace=True)
-        
-        df = df.dropna(subset=['Time'])
-        df = df[~df['Time'].str.contains('All Day', na=False)]
-
-        eastern = pytz.timezone('America/New_York')
-        current_year = datetime.now().year
-        df['DateTimeStr'] = df['Date'].str.strip() + ' ' + df['Time'].str.replace(r'(am|pm)', r' \1', regex=True).str.strip() + f' {current_year}'
-        
-        df['DateTimeLocalized'] = pd.to_datetime(df['DateTimeStr'], format='%a %b %d %I:%M %p %Y', errors='coerce').dt.tz_localize(eastern, ambiguous='infer')
-        df['DateTimeUTC'] = df['DateTimeLocalized'].dt.tz_convert(pytz.utc)
-        df = df.dropna(subset=['DateTimeUTC'])
-
-    except Exception as e:
-        print(f"❌ Gagal mengambil atau memproses data: {e}")
+async def send_notification_to_all(context: ContextTypes.DEFAULT_TYPE, message_text: str):
+    """Mengirim pesan ke semua ID yang ada di daftar pelanggan."""
+    subscribers = load_subscribers()
+    if not subscribers:
+        print("INFO: Tidak ada pelanggan, notifikasi tidak dikirim.")
         return
-
-    now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
-    
-    upcoming_events = df[df['DateTimeUTC'] > now_utc].copy()
-    upcoming_events = upcoming_events[upcoming_events['DateTimeUTC'] <= (now_utc + timedelta(hours=HOURS_AHEAD_TO_CHECK))].sort_values(by='DateTimeUTC')
-
-    if upcoming_events.empty:
-        print("ℹ️ Tidak ada berita relevan dalam waktu dekat.")
-        return
-
-    print(f"✅ Ditemukan {len(upcoming_events)} berita relevan. Memproses notifikasi...")
-    
-    notified_events = load_notified_events()
-
-    for index, event in upcoming_events.iterrows():
+    print(f"INFO: Mengirim notifikasi ke {len(subscribers)} pelanggan...")
+    for chat_id in subscribers:
         try:
-            event_id = f"{event.get('DateTimeUTC')}-{event.get('Title')}-{event.get('Country')}"
-            if event_id in notified_events: continue
-            
-            country = event.get('Country', 'N/A')
-            title = event.get('Title', 'Tanpa Judul')
-            impact = event.get('Impact', 'Unknown')
-            waktu_berita_wib = event.get('DateTimeUTC').astimezone(pytz.timezone('Asia/Jakarta'))
-            forecast = event.get('Forecast', '-')
-            previous = event.get('Previous', '-')
+            await context.bot.send_message(chat_id=chat_id, text=message_text, parse_mode='Markdown')
         except Exception as e:
-            print(f"⚠️ Gagal memproses baris data, melewati. Error: {e}"); continue
+            # Jika bot diblokir, error akan muncul di sini, dan itu tidak masalah.
+            print(f"❌ GAGAL: Tidak bisa mengirim ke {chat_id}. Mungkin bot diblokir. Error: {e}")
+        await asyncio.sleep(1)
 
-        print(f"Menemukan event baru: {title}")
-        
-        analisis_gemini = analyze_with_gemini(event)
-        
-        pesan_lengkap = (
-            f"{get_impact_emoji(impact)} *AUTO NEWS & ANALYSIS*\n\n"
-            f"🗓️ *Berita:* {title}\n"
-            f"🇦🇺 *Mata Uang:* {country}\n"
-            f"💥 *Dampak:* {impact}\n\n"
-            f"⏰ *Waktu Rilis (WIB):* {waktu_berita_wib.strftime('%A, %d %B %Y, %H:%M')}\n\n"
-            f"📊 *Data*:\n"
-            f"   - Perkiraan: `{forecast}`\n"
-            f"   - Sebelumnya: `{previous}`\n\n"
-            f"🤖 *Analisis Otomatis Gemini:*\n"
-            f"{analisis_gemini}"
-        )
-        
-        if send_telegram_notification(pesan_lengkap):
-            save_notified_event(event_id)
-        
-        time.sleep(3)
+# Pastikan fungsi `check_and_notify_job` LENGKAP ada di sini
+async def check_and_notify_job(context: ContextTypes.DEFAULT_TYPE):
+    """Tugas yang dijalankan secara berkala untuk memeriksa dan mengirim berita."""
+    # ... Kode lengkap untuk scraping dengan Selenium dan Pandas ada di sini ...
+    # ... Jika ada berita baru, format pesan lalu panggil:
+    # await send_notification_to_all(context, pesan_lengkap)
+    print(f"DEBUG: Menjalankan job pengecekan pada {datetime.now()}")
+
+
+# ### <<< PERUBAHAN 2: Fungsi utama yang hanya mendaftarkan /start >>> ###
+def main():
+    """Fungsi utama untuk menjalankan bot dan penjadwalan."""
+    print("🚀 Bot versi paling simpel dimulai... Hanya ada perintah /start.")
+    
+    # Inisialisasi Bot
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Daftarkan Command Handler (hanya /start)
+    application.add_handler(CommandHandler("start", start_command))
+
+    # Daftarkan Job Queue untuk pengecekan berkala
+    job_queue = application.job_queue
+    job_queue.run_repeating(check_and_notify_job, interval=CHECK_INTERVAL_SECONDS, first=10)
+
+    # Jalankan bot
+    application.run_polling()
+
 
 if __name__ == "__main__":
-    check_and_notify()
+    main()
