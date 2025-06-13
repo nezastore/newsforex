@@ -126,7 +126,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"➕ Pengguna baru terdaftar: {chat_id}")
         await update.message.reply_text(
             f"Halo, {user_name}! 👋\n\n"
-            "✅ Anda telah berhasil terdaftar Ketik Koin Yang Mau Di Scan Ex: BTC,ETH,Dll."
+            "✅ Anda telah berhasil terdaftar Ketik Koin Yang Mau Di Scan Ex: BTC,ETH,SOL,MEME(Micin),Dll."
         )
 
 async def send_notification_to_all(context: ContextTypes.DEFAULT_TYPE, message_text: str):
