@@ -25,8 +25,8 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
 # --- ⚙️ KONFIGURASI WAJIB (Isi bagian ini) ⚙️ ---
-TELEGRAM_BOT_TOKEN = "ISI_DENGAN_TOKEN_BOT_ANDA"
-GEMINI_API_KEY = "ISI_DENGAN_GEMINI_API_KEY_ANDA"
+TELEGRAM_BOT_TOKEN = "5693466430:AAFQK4rII8jbty-63wBVL3FaTskVEhyQg1w"
+GEMINI_API_KEY = "AIzaSyAgBNsxwQzFSVWQuEUKe7PkKykcX42BAx8"
 
 # --- 🔧 PENGATURAN LAINNYA 🔧 ---
 CALENDAR_URL = "https://www.cryptocraft.com/calendar"
